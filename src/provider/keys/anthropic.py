@@ -9,7 +9,8 @@ money:
 
     system:   SYSTEM + the output contract and compact schema   ┐ the same for every call
     user[0]:  the template's fixed instructions (the "head")    ┘ of one template: cached
-    user[1]:  the fenced document and anything after it
+    user[1…]: the request's images, if it is a `VisionRequest`
+    user[n]:  the fenced document and anything after it
     user[2]:  the rejection note, on a retry only
 
 One ``cache_control`` breakpoint sits on the head block, so the system prompt, the
@@ -39,6 +40,7 @@ outside it would fail every call; the contract-in-the-prompt path works for any 
 
 from __future__ import annotations
 
+import base64
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -46,7 +48,7 @@ from typing import Any
 from ..accounting import price_for
 from ..protocol import (
     Adapter, Answer, BudgetSpent, Malformed, ProviderError, QuotaExhausted, Refused, Request, Unavailable,
-    estimate_tokens,
+    estimate_tokens, images_of,
 )
 from ..shaping import SYSTEM, contract, split_stable
 
@@ -56,6 +58,7 @@ MIN_CACHEABLE = {"claude-haiku-4-5": 4096, "claude-sonnet-4-6": 1024, "claude-op
 
 class AnthropicKeys(Adapter):
     path = "metered"
+    vision = None  # every Claude model takes images
 
     def __init__(self, table: Mapping[str, Any] | None = None, *, key: str | None,
                  prices: Mapping[str, Mapping[str, float]] | None = None) -> None:
@@ -94,6 +97,9 @@ class AnthropicKeys(Adapter):
         cacheable = estimate_tokens(system + head) >= MIN_CACHEABLE.get(model, 512)
         content: list[dict[str, Any]] = [{"type": "text", "text": head,
                                           **({"cache_control": marker} if cacheable else {})}]
+        for image in images_of(request):
+            content.append({"type": "image", "source": {"type": "base64", "media_type": image.media_type,
+                                                        "data": base64.b64encode(image.data).decode("ascii")}})
         if tail:
             content.append({"type": "text", "text": tail})
         if note:

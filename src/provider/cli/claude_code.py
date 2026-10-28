@@ -29,12 +29,18 @@ Choices worth knowing about, with the alternative that was rejected:
   ``structured = true``, but off by default: on Windows the CLI is a ``cmd.exe`` shim and
   a schema's quotes cannot be passed through one safely. Point ``binary`` at
   ``["node", "<path>/cli.js"]`` to use it there.
+- **Images** go inline: with a `VisionRequest` the prompt is sent as one stream-json
+  user message (``--input-format stream-json --output-format stream-json``) holding the
+  images as base64 blocks and the text after them. One turn, no tool: measured live,
+  a 240x120 image and a question cost 3,922 input tokens and answered correctly. Every
+  Claude model takes images, so the adapter treats all of them as vision models.
 - Temperature and seed have no CLI flag. Extraction's determinism comes from repeated
   runs (translator ADR 0010), so this is recorded rather than worked around.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -42,7 +48,7 @@ from typing import Any
 from ..accounting import price_for
 from ..protocol import (
     Adapter, Answer, BudgetSpent, Malformed, ProviderError, QuotaExhausted, Refused, Request, Unavailable,
-    estimate_tokens,
+    estimate_tokens, images_of,
 )
 from ..shaping import SYSTEM, with_contract
 from . import _process
@@ -63,6 +69,7 @@ QUIET_TRAFFIC = {
 
 class ClaudeCode(Adapter):
     path = "subscription"
+    vision = None  # every Claude model takes images
 
     def __init__(self, table: Mapping[str, Any] | None = None, *, environ: Mapping[str, str] | None = None,
                  prices: Mapping[str, Mapping[str, float]] | None = None) -> None:
@@ -80,7 +87,9 @@ class ClaudeCode(Adapter):
         self._prices = dict(prices or {})
 
     def argv(self, model: str, request: Request) -> list[str]:
-        args = ["-p", "--output-format", "json", "--model", model, "--tools", "", "--strict-mcp-config",
+        formats = (["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+                   if images_of(request) else ["--output-format", "json"])
+        args = ["-p", *formats, "--model", model, "--tools", "", "--strict-mcp-config",
                 "--setting-sources", "project", "--disable-slash-commands", "--no-session-persistence",
                 "--system-prompt", self.system_prompt, *self.extra_args]
         if self.structured:
@@ -91,7 +100,15 @@ class ClaudeCode(Adapter):
         prompt = (request.prompt if self.structured else with_contract(request.prompt, request.schema)) + note
         env = _process.child_env(self._environ, extra={
             **QUIET_TRAFFIC, **self.env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(request.max_output_tokens)})
-        result = _process.run(self.argv(model, request), stdin_text=prompt, timeout_s=self.timeout_s, env=env)
+        images = images_of(request)
+        stdin = prompt
+        if images:
+            blocks = [{"type": "image", "source": {"type": "base64", "media_type": i.media_type,
+                                                   "data": base64.b64encode(i.data).decode("ascii")}}
+                      for i in images]
+            stdin = json.dumps({"type": "user", "message": {"role": "user", "content": [
+                *blocks, {"type": "text", "text": prompt}]}}) + "\n"
+        result = _process.run(self.argv(model, request), stdin_text=stdin, timeout_s=self.timeout_s, env=env)
         return self._read(request, model, prompt, result)
 
     def _read(self, request: Request, model: str, prompt: str, result: _process.Run) -> Answer:
@@ -154,10 +171,20 @@ class ClaudeCode(Adapter):
 
 
 def _result_object(stdout: str) -> dict | None:
-    """The ``type: result`` object. Older CLIs printed a list of messages instead."""
+    """The ``type: result`` object: the whole output with ``--output-format json``, the
+    last line of the stream with ``stream-json``. Older CLIs printed a list of messages."""
     try:
         parsed = json.loads(stdout)
     except json.JSONDecodeError:
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if line.startswith("{") and '"result"' in line:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if item.get("type") == "result":
+                    return item
         return None
     if isinstance(parsed, dict):
         return parsed

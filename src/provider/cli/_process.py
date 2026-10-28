@@ -122,14 +122,17 @@ def _tail(text: str, limit: int = 2000) -> str:
 
 
 def run(argv: Sequence[str] | Callable[[Path], Sequence[str]], *, stdin_text: str | None, timeout_s: float,
-        env: Mapping[str, str], files: Mapping[str, str] | None = None, cwd: Path | None = None) -> Run:
+        env: Mapping[str, str], files: Mapping[str, str | bytes] | None = None, cwd: Path | None = None) -> Run:
     """Run once, in a fresh temporary directory with ``files`` written into it first (a
     schema, a system prompt). ``argv`` may be a function of that directory, for
     arguments that name a file in it."""
     workdir = Path(tempfile.mkdtemp(prefix="aiprovider-call-")) if cwd is None else cwd
     try:
         for name, content in (files or {}).items():
-            (workdir / name).write_text(content, encoding="utf-8")
+            if isinstance(content, bytes):
+                (workdir / name).write_bytes(content)
+            else:
+                (workdir / name).write_text(content, encoding="utf-8")
         args = list(argv(workdir) if callable(argv) else argv)
         guard_shim(args)
         kwargs: dict = {}

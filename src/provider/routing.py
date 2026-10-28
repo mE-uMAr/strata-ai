@@ -12,6 +12,7 @@ first. The router walks it for each request and moves to the next step only for 
 | The model refused | No | **No**: raised to the caller |
 | The account has no money left | No | **No**: raised to the caller |
 | Any other failure | No | Yes |
+| The request carries images and this step's model cannot see them | Not called | Yes, without spawning it |
 
 Escalating on *suspicion* (a short answer, a low-confidence look) is not on the list.
 A small model whose answer validates is the answer; asking a bigger one as well would
@@ -45,7 +46,7 @@ from dataclasses import dataclass, field
 from .accounting import Entry, Ledger, QuotaMeter
 from .config import ConfigError
 from .protocol import (
-    Adapter, AdapterError, Answer, BudgetSpent, Malformed, ProviderError, Refused, Request,
+    Adapter, AdapterError, Answer, BudgetSpent, Malformed, ProviderError, Refused, Request, images_of,
 )
 from .shaping import rejection
 from .validate import problems
@@ -103,6 +104,10 @@ class Router:
     def _walk_step(self, request: Request, index: int, step: Step, trail: _Trail) -> Answer | str:
         """Try one step, with its earned retries. The winning `Answer`, or the reason to move on."""
         adapter = step.adapter
+        if images_of(request) and not adapter.sees_images(step.model):
+            self._record(request, step, index, 0, "skipped", note="cannot see images")
+            trail.failures.append(f"{step}: cannot see images")
+            return "no vision"
         note = ""
         for attempt in range(self.max_schema_retries + 1):
             skip = self.quota.check(adapter.name) if adapter.path == "subscription" else None

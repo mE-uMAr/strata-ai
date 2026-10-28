@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .accounting import Entry, Ledger
-from .protocol import Answer, Completion, Provider, Request
+from .protocol import Answer, Completion, Provider, Request, images_of
 from .validate import problems
 
 
@@ -72,7 +72,12 @@ class ReplayCache:
                 saved = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 saved = None  # unreadable: treated as a miss and overwritten below
-            if isinstance(saved, dict) and isinstance(saved.get("text"), str):
+            # A request with images is keyed on them through its input_hash already
+            # (protocol.with_images); the digests are checked as well, so a caller that
+            # hashed without them gets a miss rather than another image's answer.
+            digests = [i.digest for i in images_of(request)]
+            if (isinstance(saved, dict) and isinstance(saved.get("text"), str)
+                    and saved.get("images", []) == digests):
                 return self._hit(request, saved)
         answer = self.inner.complete(request)
         if problems(answer.text, request.schema):
@@ -105,6 +110,8 @@ class ReplayCache:
             "output_tokens": answer.output_tokens,
             "cost_usd": answer.cost_usd,
         }
+        if images_of(request):
+            record["images"] = [i.digest for i in images_of(request)]
         if isinstance(answer, Answer):
             record.update(adapter=answer.adapter, model=answer.model, path=answer.path,
                           usage_source=answer.usage_source, cached_input_tokens=answer.cached_input_tokens,

@@ -33,7 +33,7 @@ from typing import Any
 ENV_PREFIX = "AIPROVIDER_"
 KEYCHAIN_SERVICE = "strata-aiprovider"
 
-ADAPTER_KINDS = ("claude_code", "codex", "command", "keys")
+ADAPTER_KINDS = ("claude_code", "codex", "command_code", "command", "keys")
 """The fixed set of adapter families. A route names one of these, never a module
 path: like the translator's own config, nothing here imports by name at run time."""
 
@@ -74,7 +74,7 @@ class Settings:
     cache_dir: Path | None = None
     ledger_path: Path | None = None
     adapters: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    """Per-adapter tables: ``claude_code``, ``codex``, ``command.<name>``, ``keys.<vendor>``."""
+    """Per-adapter tables: ``claude_code``, ``codex``, ``command_code``, ``command.<name>``, ``keys.<vendor>``."""
     quotas: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     prices: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
     environ: Mapping[str, str] = field(default_factory=dict, repr=False)
@@ -180,7 +180,7 @@ def load(environ: Mapping[str, str] | None = None, *, config_path: Path | None =
         for model_id, steps in table.get("routes", {}).items()
     }
     adapters: dict[str, Mapping[str, Any]] = {}
-    for kind in ("claude_code", "codex"):
+    for kind in ("claude_code", "codex", "command_code"):
         if kind in table:
             adapters[kind] = table[kind]
     for kind in ("command", "keys"):

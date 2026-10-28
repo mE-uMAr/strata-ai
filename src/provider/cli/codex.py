@@ -23,6 +23,9 @@ Choices worth knowing about:
 - **``--output-schema``** (native structured output) is used when ``structured = true``;
   the schema is written to a file in the call's directory, so nothing quoted crosses a
   shim's command line.
+- **Images** are written into the call's directory and passed with ``--image <file>``,
+  one flag per image. All the GPT-5 models Codex runs take images; narrow the set with
+  ``vision_models`` if yours does not. Not yet checked against a live Codex install.
 - **The output ceiling** is checked against the measured ``output_tokens`` after the
   call: the CLI's own setting for it is a config-file key, not a per-call flag, and an
   unverified key is worse than an honest after-the-fact check.
@@ -35,8 +38,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..accounting import price_for
-from ..protocol import Adapter, Answer, Malformed, ProviderError, QuotaExhausted, Request, Unavailable, estimate_tokens
-from ..shaping import with_contract
+from ..protocol import (
+    Adapter, Answer, Malformed, ProviderError, QuotaExhausted, Request, Unavailable, estimate_tokens, images_of,
+)
+from ..shaping import image_files, with_contract
 from . import _process
 
 LIMIT = ("usage limit", "rate limit", "too many requests", "429", "quota")
@@ -59,12 +64,14 @@ class Codex(Adapter):
         self.extra_args = list(table.get("extra_args", []))
         self.env = dict(table.get("env", {}))
         self.quota_units = float(table.get("quota_units", 1.0))
+        self.vision = frozenset(table["vision_models"]) if "vision_models" in table else None
         self._environ = environ
         self._prices = dict(prices or {})
 
     def ask(self, request: Request, model: str, note: str = "") -> Answer:
         prompt = (request.prompt if self.structured else with_contract(request.prompt, request.schema)) + note
         executable = _process.resolve(self.binary)
+        pictures = image_files(images_of(request))
 
         def argv(workdir) -> list[str]:
             args = ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
@@ -73,11 +80,13 @@ class Codex(Adapter):
                 args += ["-c", f"model_reasoning_effort={self.reasoning_effort}"]
             if self.structured:
                 args += ["--output-schema", str(workdir / "schema.json")]
+            for name in pictures:
+                args += ["--image", str(workdir / name)]
             return [*executable, *args, *self.extra_args, "-"]
 
         env = _process.child_env(self._environ, extra=self.env)
         result = _process.run(argv, stdin_text=prompt, timeout_s=self.timeout_s, env=env,
-                              files={"schema.json": json.dumps(request.schema)})
+                              files={"schema.json": json.dumps(request.schema), **pictures})
         return self._read(request, model, prompt, result)
 
     def _read(self, request: Request, model: str, prompt: str, result: _process.Run) -> Answer:

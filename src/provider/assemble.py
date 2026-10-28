@@ -34,6 +34,9 @@ def build_adapter(name: str, settings: Settings, environ: Mapping[str, str] | No
     if name == "codex":
         from .cli.codex import Codex
         return Codex(table, environ=environ, prices=prices)
+    if name == "command_code":
+        from .cli.command_code import CommandCode
+        return CommandCode(table, environ=environ, prices=prices)
     if name.startswith("command."):
         from .cli.command import CommandAdapter, CommandSpec
         if not table:

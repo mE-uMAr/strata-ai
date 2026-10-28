@@ -1,6 +1,6 @@
 """A stand-in for a subscription CLI, so every CLI path runs with no subscription.
 
-    python sim/fake_cli.py --as generic|claude|codex [tool arguments...]
+    python sim/fake_cli.py --as generic|claude|codex|commandcode [tool arguments...]
 
 It reads the prompt the way the real tool would (stdin, or ``--prompt`` on argv for the
 generic tool), and prints output in that tool's shape:
@@ -11,6 +11,15 @@ generic tool), and prints output in that tool's shape:
   the previous call (same state directory) is reported as ``cache_read_input_tokens``.
 - ``codex``: ``codex exec --json`` events, one per line, ending in ``turn.completed``
   with ``usage``.
+- ``commandcode``: Command Code's ``-p --output-format json`` NDJSON stream, ending in
+  a ``result`` line with ``finalText`` and ``usage`` (``inputTokens`` as the total,
+  ``cacheReadTokens`` part of it), as captured from command-code 1.84.0. A call whose
+  ``--max-turns`` is too small for its images exits 8, as the real CLI does on the cap.
+
+Images are counted however each tool receives them: base64 blocks in Claude Code's
+stream-json input, ``--image <file>`` for Codex and the generic tool, ``@file`` mentions
+for Command Code. Each file must exist in the working directory to count. The count is
+in the ``seen-<n>.json`` report as ``images_seen``.
 
 Behaviour comes from the environment, which the adapter under test passes through its
 configured ``env``:
@@ -18,7 +27,8 @@ configured ``env``:
 - ``FAKE_CLI_MODES``: comma-separated, one per call (the last repeats): ``ok``,
   ``prose`` (JSON wrapped in chatter), ``invalid`` (JSON that breaks the schema),
   ``limit``, ``hang``, ``ask`` (stops to ask a question on stdin), ``crash``,
-  ``logged_out``, ``refuse``, ``nousage``, ``long`` (more output than the ceiling).
+  ``logged_out``, ``refuse``, ``nousage``, ``long`` (more output than the ceiling),
+  ``toolcall`` (Command Code only: reaches for a tool and hits the turn cap).
 - ``FAKE_CLI_ANSWER``: the JSON to answer with.
 - ``FAKE_CLI_STATE``: a directory for the call counter, the cache emulation and a
   ``seen-<n>.json`` report of what each call saw (argv, cwd, which credential-shaped
@@ -57,12 +67,23 @@ def main() -> int:
     else:
         prompt = sys.stdin.read()
 
+    images_seen = 0
+    if persona == "claude" and "stream-json" in args:
+        message = json.loads(prompt.strip().splitlines()[0])["message"]
+        images_seen = sum(1 for b in message["content"] if b["type"] == "image" and b["source"]["data"])
+        prompt = "".join(b.get("text", "") for b in message["content"] if b["type"] == "text")
+    elif persona in ("codex", "generic"):
+        images_seen = sum(1 for i, a in enumerate(args) if a == "--image" and Path(args[i + 1]).is_file())
+    elif persona == "commandcode":
+        images_seen = sum(1 for word in prompt.split() if word.startswith("@") and Path(word[1:]).is_file())
+
     (state / f"seen-{n}.json").write_text(json.dumps({
         "argv": args, "cwd": os.getcwd(), "cwd_entries": sorted(os.listdir(".")),
         "credential_vars": sorted(k for k in os.environ if any(
             s in k.upper() for s in ("API_KEY", "AUTH_TOKEN", "ANTHROPIC", "AIPROVIDER"))),
         "max_output_env": os.environ.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
-        "prompt_tokens": tokens(prompt), "prompt_tail": prompt[-300:], "mode": mode,
+        "prompt_tokens": tokens(prompt), "prompt_tail": prompt[-300:], "prompt_head": prompt[:200],
+        "images_seen": images_seen, "mode": mode,
     }, indent=2))
 
     if mode == "hang":
@@ -89,6 +110,9 @@ def main() -> int:
             print(json.dumps({"type": "result", "subtype": "success", "is_error": True,
                               "result": "Claude AI usage limit reached|1767225600"}))
             return 1
+        if persona == "commandcode":
+            print(json.dumps({"type": "result", "subtype": "error", "error": "Usage limit reached for your plan."}))
+            return 1
         print("Error: 429 Too Many Requests: quota exhausted", file=sys.stderr)
         return 1
 
@@ -103,6 +127,24 @@ def main() -> int:
         answer = json.dumps({"rules": ["x" * 400] * 200, "decision": "proceed"})
 
     in_tokens, out_tokens = tokens(prompt), tokens(answer)
+
+    if persona == "commandcode":
+        turns = int(args[args.index("--max-turns") + 1]) if "--max-turns" in args else 100
+        if mode == "toolcall" or images_seen + 1 > turns:
+            print(json.dumps({"type": "event", "event": {"type": "run_start", "sessionId": "fake"}}))
+            print(json.dumps({"type": "result", "subtype": "error_max_turns", "stopReason": "max_turns",
+                              "usage": {"inputTokens": 14400, "outputTokens": 40, "cacheReadTokens": 5248,
+                                        "cacheWriteTokens": 0}}))
+            return 8
+        overhead = 14300  # the agent system prompt and tool definitions the real CLI adds
+        total = overhead + in_tokens + images_seen * 14700
+        print(json.dumps({"type": "event", "event": {"type": "run_start", "sessionId": "fake"}}))
+        print(json.dumps({"type": "event", "event": {"type": "text_delta", "delta": answer}}))
+        print(json.dumps({"type": "result", "subtype": "success", "sessionId": "fake", "stopReason": "end_turn",
+                          "usage": {"inputTokens": total, "outputTokens": out_tokens, "cacheReadTokens": 5248,
+                                    "cacheWriteTokens": 0},
+                          "durationMs": 4000, "finalText": answer}))
+        return 0
 
     if persona == "generic":
         stats = {"models": {"fake-small": {"tokens": {"prompt": in_tokens, "candidates": out_tokens, "cached": 0}}}}
@@ -125,6 +167,14 @@ def main() -> int:
                               "stop_reason": "refusal", "usage": {"input_tokens": in_tokens, "output_tokens": 6}}))
             return 0
         cost = round((write * 1.25 * 0.10 + read * 0.01 + out_tokens * 0.50) / 1e6, 8)
+        if "stream-json" in args:
+            print(json.dumps({"type": "system", "subtype": "init", "session_id": "fake"}))
+            print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": answer}]}}))
+            print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": answer,
+                              "stop_reason": "end_turn", "total_cost_usd": cost,
+                              "usage": {"input_tokens": 0, "cache_creation_input_tokens": write + images_seen * 1500,
+                                        "cache_read_input_tokens": read, "output_tokens": out_tokens}}))
+            return 0
         print(json.dumps({
             "type": "result", "subtype": "success", "is_error": False, "duration_ms": 900, "num_turns": 1,
             "result": answer, "session_id": "00000000-0000-0000-0000-000000000000", "total_cost_usd": cost,

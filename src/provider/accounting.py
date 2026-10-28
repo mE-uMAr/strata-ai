@@ -314,9 +314,10 @@ def report(entries: list[Entry], quota: QuotaMeter | None = None) -> SavingRepor
             else:
                 answered[e.path if e.path in answered else "local"] += 1
                 escalated += e.rung > 0
-        skipped = e.outcome == "limit" and "counted locally" in e.note
-        if skipped:
+        if e.outcome == "limit" and "counted locally" in e.note:
             failed["skipped for quota"] = failed.get("skipped for quota", 0) + 1
+        elif e.outcome == "skipped":
+            failed[f"skipped: {e.note}"] = failed.get(f"skipped: {e.note}", 0) + 1
         elif e.outcome != "hit":
             attempts += 1
             metered_attempts += e.path == "metered"

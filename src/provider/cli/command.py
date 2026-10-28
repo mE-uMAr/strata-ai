@@ -16,6 +16,15 @@ table in the TOML file says how to run the tool and where its answer is::
     price_as = "gemini-2.5-flash"              # for the metered-equivalent figure
     models = { extraction = "gemini-2.5-flash" }
 
+A tool whose models can see images says which, and how they reach it::
+
+    vision_models = ["gemini-2.5-flash"]
+    image_arg = ["--image", "{image}"]     # repeated once per image; or:
+    image_mention = true                   # "@image-1.png" before the task, for agents
+                                           # that read files themselves
+
+The images are written into the call's directory either way.
+
 Placeholders in ``argv``: ``{model}``, ``{prompt}`` (argv mode only),
 ``{max_output_tokens}``, ``{workdir}`` (the call's empty temporary directory) and
 ``{schema_file}`` (the request's schema, written into that directory).
@@ -47,8 +56,10 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..accounting import price_for
-from ..protocol import Adapter, Answer, Malformed, ProviderError, QuotaExhausted, Request, Unavailable, estimate_tokens
-from ..shaping import with_contract
+from ..protocol import (
+    Adapter, Answer, Malformed, ProviderError, QuotaExhausted, Request, Unavailable, estimate_tokens, images_of,
+)
+from ..shaping import image_files, image_mentions, with_contract
 from . import _process
 
 DEFAULT_LIMIT_PATTERNS = ("usage limit", "rate limit", "quota", "limit reached", "too many requests", "429")
@@ -82,6 +93,12 @@ class CommandSpec:
     """Variables to pass through although they look like credentials. Each is named."""
     max_tokens_env: str | None = None
     """An environment variable the tool reads as its output ceiling, if it has one."""
+    vision_models: tuple[str, ...] = ()
+    """Models of this tool that can see images. Empty means none."""
+    image_arg: tuple[str, ...] = ()
+    """Arguments added once per image; ``{image}`` is the image file's path."""
+    image_mention: bool = False
+    """``@``-mention the image files before the task instead of passing an argument."""
     output_contract: bool = True
     """Append the JSON-only instruction and the compact schema. Turn off only for a
     tool given the schema some other way (``{schema_file}``)."""
@@ -97,6 +114,9 @@ class CommandSpec:
             values[key] = tuple(value) if isinstance(value, list) else value
         if "binary" not in values:
             raise ValueError(f"command.{name}: 'binary' is required")
+        if values.get("vision_models") and not (values.get("image_arg") or values.get("image_mention")):
+            raise ValueError(f"command.{name}: vision_models needs image_arg or image_mention to say how images "
+                             "reach the tool")
         if values.get("prompt_via") == "argv" and not any("{prompt}" in a for a in values.get("argv", ())):
             raise ValueError(f"command.{name}: prompt_via = 'argv' needs a {{prompt}} placeholder in argv")
         return cls(name=name, **values)
@@ -176,12 +196,16 @@ class CommandAdapter(Adapter):
         self.name = f"command.{spec.name}"
         self.path = spec.path
         self.models = dict(spec.models)
+        self.vision = frozenset(spec.vision_models)
         self._environ = environ
         self._prices = dict(prices or {})
 
     def ask(self, request: Request, model: str, note: str = "") -> Answer:
         spec = self.spec
         prompt = (with_contract(request.prompt, request.schema) if spec.output_contract else request.prompt) + note
+        pictures = image_files(images_of(request))
+        if pictures and spec.image_mention:
+            prompt = image_mentions(pictures) + prompt
         executable = _process.resolve(spec.binary)
         if spec.prompt_via == "argv" and _process.is_shim(executable[0]):
             raise ProviderError(f"{self.name}: refusing to put the prompt on the argv of a cmd.exe shim; "
@@ -197,6 +221,8 @@ class CommandAdapter(Adapter):
                 for key, value in values.items():
                     arg = arg.replace(key, value)
                 out.append(arg.replace("{prompt}", prompt))
+            for name in pictures:
+                out += [a.replace("{image}", os.path.join(workdir, name)) for a in spec.image_arg]
             return [*executable, *out]
 
         extra = dict(spec.env)
@@ -207,7 +233,7 @@ class CommandAdapter(Adapter):
         result = _process.run(argv,
                               stdin_text=prompt if spec.prompt_via == "stdin" else None,
                               timeout_s=spec.timeout_s, env=env,
-                              files={"schema.json": json.dumps(request.schema)})
+                              files={"schema.json": json.dumps(request.schema), **pictures})
         return self._read(request, model, prompt, result)
 
     def _read(self, request: Request, model: str, prompt: str, result: _process.Run) -> Answer:

@@ -20,6 +20,7 @@ What this module adds never changes the protocol:
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
@@ -27,8 +28,9 @@ from translator.gateway.models import ProviderError
 from translator.gateway.providers import Completion, Provider, RefusingProvider, Request, estimate_tokens
 
 __all__ = [
-    "Adapter", "Answer", "BudgetSpent", "Completion", "Malformed", "Provider", "ProviderError",
-    "QuotaExhausted", "Refused", "RefusingProvider", "Request", "Unavailable", "estimate_tokens",
+    "Adapter", "Answer", "BudgetSpent", "Completion", "Image", "Malformed", "Provider", "ProviderError",
+    "QuotaExhausted", "Refused", "RefusingProvider", "Request", "Unavailable", "VisionRequest", "estimate_tokens",
+    "images_of", "with_images",
 ]
 
 Path = Literal["cache", "subscription", "metered", "local"]
@@ -37,6 +39,61 @@ Path = Literal["cache", "subscription", "metered", "local"]
 UsageSource = Literal["measured", "estimated"]
 """`measured` means the tool or vendor reported the number. `estimated` means this
 module computed it from text length, because the tool did not say."""
+
+
+IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
+
+
+@dataclass(frozen=True)
+class Image:
+    """One image for a vision model: the bytes and their media type."""
+
+    data: bytes
+    media_type: str = "image/png"
+
+    def __post_init__(self) -> None:
+        if self.media_type not in IMAGE_TYPES:
+            raise ValueError(f"unsupported image type {self.media_type!r}; supported: {sorted(IMAGE_TYPES)}")
+        if not self.data:
+            raise ValueError("an image needs bytes")
+
+    @property
+    def digest(self) -> str:
+        return "sha256:" + hashlib.sha256(self.data).hexdigest()
+
+    @property
+    def suffix(self) -> str:
+        return IMAGE_TYPES[self.media_type]
+
+
+@dataclass(frozen=True)
+class VisionRequest(Request):
+    """A `Request` that also carries images, as `Answer` is a `Completion` that also
+    carries accounting.
+
+    The `Provider` protocol is unchanged: a `VisionRequest` *is* a `Request`, so the
+    gateway and every provider accept it, and a provider that cannot see images reads
+    the text and nothing else. The router uses the images to pick a step whose model can
+    see them. Build one with `with_images`, which folds the images into ``input_hash``
+    so a cache can never answer one image's question with another image's answer.
+    """
+
+    images: tuple[Image, ...] = ()
+
+
+def images_of(request: Request) -> tuple[Image, ...]:
+    return tuple(getattr(request, "images", ()) or ())
+
+
+def with_images(request: Request, images: tuple[Image, ...] | list[Image]) -> VisionRequest:
+    """``request`` plus images, with an ``input_hash`` that covers them."""
+    images = tuple(images)
+    if not images:
+        raise ValueError("with_images needs at least one image")
+    digest = hashlib.sha256("|".join([request.input_hash, *(i.digest for i in images)]).encode()).hexdigest()
+    fields = {f: getattr(request, f) for f in Request.__dataclass_fields__}
+    fields["input_hash"] = "sha256:" + digest
+    return VisionRequest(**fields, images=images)
 
 
 @dataclass(frozen=True)
@@ -126,10 +183,15 @@ class Adapter:
     name: str
     path: Path
     models: dict[str, str]
+    vision: frozenset[str] | None = frozenset()
+    """Models this adapter can show images to. ``None`` means every model it runs."""
 
     @property
     def metered(self) -> bool:
         return self.path == "metered"
+
+    def sees_images(self, model: str) -> bool:
+        return self.vision is None or model in self.vision
 
     def ask(self, request: Request, model: str, note: str = "") -> Answer:  # pragma: no cover - interface
         raise NotImplementedError

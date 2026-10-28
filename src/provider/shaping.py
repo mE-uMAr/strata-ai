@@ -74,3 +74,19 @@ def split_stable(prompt: str) -> tuple[str, str]:
     if m is None or m.start() == 0:
         return prompt, ""
     return prompt[: m.start()], prompt[m.start():]
+
+
+def image_files(images) -> dict[str, bytes]:
+    """The request's images as files for a CLI's working directory: image-1.png, ..."""
+    return {f"image-{i}.{image.suffix}": image.data for i, image in enumerate(images, 1)}
+
+
+def image_mentions(names) -> str:
+    """For an agent CLI that reads images itself: names them, ``@``-mentioned, before the task.
+
+    Prepended rather than appended, which costs the CLI's prefix cache nothing (its own
+    system prompt comes first and is untouched) and puts the images where the model
+    reads them before the question about them.
+    """
+    listed = " ".join(f"@{name}" for name in names)
+    return f"Images for this task (read each before answering): {listed}\n\n"
