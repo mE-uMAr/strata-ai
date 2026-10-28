@@ -51,6 +51,14 @@ claim("ReplayProvider text equals the cached answer", replayed.text == first.tex
 claim("ReplayProvider input_tokens equals the original call", replayed.input_tokens,
       replayed.input_tokens == first.input_tokens)
 
+heading("an unreadable entry is a miss, and is rewritten")
+cache.path_for(req).write_text('{"text": "trunc', encoding="utf-8")
+calls_before = inner.calls
+repaired = cache.complete(req)
+claim("provider called for the unreadable entry", inner.calls - calls_before, inner.calls - calls_before == 1)
+claim("entry rewritten and readable again", json.loads(cache.path_for(req).read_text(encoding="utf-8"))["text"] == repaired.text,
+      json.loads(cache.path_for(req).read_text(encoding="utf-8"))["text"] == repaired.text)
+
 heading("an answer that fails the schema is not cached")
 bad = Scripted(lambda r: "Sure! Here are the rules: " + json.dumps(ANSWER))
 bad_cache = ReplayCache(root / "bad", bad)

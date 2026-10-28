@@ -68,7 +68,12 @@ class ReplayCache:
         self.stats.lookups += 1
         path = self.path_for(request)
         if path.is_file():
-            return self._hit(request, json.loads(path.read_text(encoding="utf-8")))
+            try:
+                saved = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                saved = None  # unreadable: treated as a miss and overwritten below
+            if isinstance(saved, dict) and isinstance(saved.get("text"), str):
+                return self._hit(request, saved)
         answer = self.inner.complete(request)
         if problems(answer.text, request.schema):
             self.stats.refused_writes += 1
