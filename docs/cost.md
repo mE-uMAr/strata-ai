@@ -95,6 +95,15 @@ configured without `AIPROVIDER_ALLOW_METERED` (`sim/s05`, `sim/s06`). On the CLI
   tokens per call is overhead the CLI adds that these flags do not remove (the user's
   global memory file and environment context). It costs quota, not money.
 
+### Command Code's overhead
+
+Command Code sends its agent system prompt and tool definitions with every call, and has
+no flag to replace them. Measured live: **14,481** input tokens for a 20-token question
+(5,248 of them read from its cache), and **29,325** for one image, because reading an
+image takes a second turn. Claude Code answered the same two questions with **954** and
+**997**. That is why the example routes put Command Code after Claude Code: it is on the
+route for its models (94, 49 of which see images), not for its cost.
+
 ## 8. Report the saving
 
 `python -m provider.report <ledger>`; see the README for a full sample. From

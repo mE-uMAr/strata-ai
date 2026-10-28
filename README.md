@@ -7,19 +7,24 @@ This repository is what the platform hands it. Every vendor name, API key, CLI b
 path and price table in Strata lives here and nowhere else.
 
 ```text
-translator gateway ──complete(Request)──▶ ReplayCache ──miss──▶ Router ──▶ claude_code   (subscription)
-   (prompts, hash,                         root/<hash>.json      │  ladder    codex         (subscription)
-    budgets, schema)                       never pays twice      │  retries   command.<x>   (subscription, by config)
-                                                                  │  ledger    keys.anthropic (metered, opt-in only)
+translator gateway ──complete(Request)──▶ ReplayCache ──miss──▶ Router ──▶ claude_code    (subscription)
+   (prompts, hash,                         root/<hash>.json      │  ladder    command_code   (subscription)
+    budgets, schema)                       never pays twice      │  retries   codex          (subscription)
+                                                                  │  ledger    command.<x>    (subscription, by config)
+                                                                  │            keys.anthropic (metered, opt-in only)
                                                                   ▼
                                                          ledger.jsonl ──▶ saving report
 ```
 
 **Before launch** every route runs through flat-rate subscription CLIs (Claude Code,
-Codex, and any other CLI declared in config). **After launch** a route can add a
+Command Code and its 94 models, Codex, and any other CLI declared in config). **After launch** a route can add a
 metered API key; the caller cannot tell which answered except by the cost. Nothing
 reaches a model unless configuration says so: with no configuration this module
 assembles into the translator's own `RefusingProvider`.
+
+**Requests can carry images.** A `VisionRequest` (built with `with_images`) is routed
+only to steps whose model can see images; the others are skipped without being started.
+See [docs/vision.md](docs/vision.md).
 
 ## Quickstart
 
@@ -104,7 +109,10 @@ one of them.
 | `s06_metered_keys` | The Anthropic adapter through the official SDK against a loopback fake: request shape, prompt caching, error mapping |
 | `s07_saving_report` | A two-pass job through the translator's gateway, and the report that accounts for it |
 | `s08_prompt_shape` | The prompt shape on the translator's real templates; the example config |
-| `live_claude_code` | One real subscription call (`--live` only; not in `run_all`) |
+| `s09_command_code` | Command Code in its captured output shape; turn-cap retries; the 94-model catalog |
+| `s10_vision` | Images in the request's identity; routing around blind steps; image delivery per adapter |
+| `live_claude_code` | Real subscription calls, text and an image (`--live` only; not in `run_all`) |
+| `live_command_code` | Real Command Code calls, text and an image (`--live` only; not in `run_all`) |
 
 They need no network, no subscription and no key: CLIs are played by
 [`sim/fake_cli.py`](sim/fake_cli.py) and the API by
@@ -117,6 +125,7 @@ They need no network, no subscription and no key: CLIs are played by
 | [docs/design.md](docs/design.md) | The seam, the stack, the modules and the shape of an answer |
 | [docs/routing.md](docs/routing.md) | Routes, retries, escalation, quota, and the metered gate |
 | [docs/cost.md](docs/cost.md) | Each token-cost requirement of the brief, how it is met, and the number that shows it |
+| [docs/vision.md](docs/vision.md) | Requests with images, which models see them, and how each tool receives them |
 | [docs/decisions.md](docs/decisions.md) | Choices where an alternative was weighed, and why it lost |
 | [docs/open-issues.md](docs/open-issues.md) | What is not done, not verified, or belongs to another repository |
 

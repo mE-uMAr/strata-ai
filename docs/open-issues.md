@@ -21,6 +21,12 @@ tokens. This module attaches the spend to the error (`error.spent`) and writes i
 own ledger, so the saving report is right, but the gateway's budget does not see it.
 Closing it is a translator change: read `spent` from the error when it is there.
 
+**The translator cannot send images yet.** Its gateway builds a plain `Request` from
+rendered text, so vision is reachable only by a caller that builds a `VisionRequest`
+itself. Using it in extraction needs a pass that renders the page images it wants
+looked at, attaches them with `with_images`, and includes them in the hash it logs
+([vision](vision.md)).
+
 ## Not verified against a live tool
 
 - **Codex.** The CLI is not installed where this was built. The adapter is written to
@@ -31,8 +37,18 @@ Closing it is a translator change: read `spent` from the error when it is there.
   reason: its flags and output paths are not checked against an installed version.
 - **OpenAI prices** in `accounting.PRICES` were not re-verified when written; they feed
   only the metered-equivalent figure for Codex calls. Override them in `[prices]`.
-- **Claude Code** was checked live once (`sim/live_claude_code.py --live`): the envelope,
-  usage, cost and model fields read as expected.
+- **Claude Code** was checked live (`sim/live_claude_code.py --live`), text and an inline
+  image: the envelope, usage, cost and model fields read as expected, and the image was
+  read correctly.
+- **Command Code** was checked live (`sim/live_command_code.py --live`), text with
+  `deepseek/deepseek-v4-flash` and an image with `deepseek/deepseek-v4.1-flash`. Its error
+  shapes (usage limit, logged out) were not seen live; the adapter matches them by
+  message, as for the other CLIs.
+- **Command Code's vision list** comes from the models' own descriptions. Only
+  `deepseek/deepseek-v4.1-flash` has read an image here.
+- **Command Code's billing** is assumed to be a plan (`path = "subscription"`). The CLI
+  reports no cost, and no prices are configured for its non-Claude models, so their
+  metered-equivalent figure is 0 until `[prices]` entries are added.
 
 ## Limits of the CLI path
 
@@ -52,6 +68,13 @@ Closing it is a translator change: read `spent` from the error when it is there.
   tokens, which show up in its usage.
 - **Quota limits are configured, not discovered.** No CLI reports its remaining window;
   the `[quota.<adapter>]` numbers must be set to the plan's allowance.
+
+## Free models and uploaders' documents
+
+Command Code lists three free models (`reflection/beam:free`, `poolside/laguna-s-2.1-free`,
+`stealth/glyph-cluster:free`; `FREE_MODELS`). A free or stealth model may be offered in
+exchange for the data sent to it. None is in the example routes; check the terms before
+routing an uploader's document to one.
 
 ## Not built
 

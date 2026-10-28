@@ -24,6 +24,8 @@ two ways the gateway already tolerates:
   subscription, metered, local), `usage_source` (measured or estimated),
   `cached_input_tokens`, `quota_units`, `metered_equivalent_usd`, `attempts` and
   `escalations`.
+- **`VisionRequest` subclasses `Request`**, adding `images`. Every provider accepts it;
+  the router uses the images to choose a step that can see them ([vision](vision.md)).
 - **Every error is a `ProviderError` subclass**, so the gateway handles it as it already
   does. The subclass is the reason (`Unavailable`, `QuotaExhausted`, `Malformed`,
   `Refused`, `BudgetSpent`), which is what the router acts on, and each carries `spent`:
@@ -48,7 +50,8 @@ happened consumed; the original call's cost is the hit's `avoided_usd` in the le
 ```text
 ReplayCache            if cache_dir is set; a hit stops here
   Router               one route per caller model_id; retries, escalation, ledger, quota
-    adapters           cli/claude_code, cli/codex, cli/command (any CLI by config), keys/anthropic
+    adapters           cli/claude_code, cli/command_code, cli/codex, cli/command (any CLI by
+                       config), keys/anthropic
 ```
 
 `provider.from_environment()` builds it from configuration. With no routes it returns
@@ -63,7 +66,7 @@ deployment can attach a single adapter without a router if it wants to.
 
 | Module | Does |
 | --- | --- |
-| `protocol.py` | The imported seam, `Answer`, the error reasons, the `Adapter` base |
+| `protocol.py` | The imported seam, `Answer`, `Image` and `VisionRequest`, the error reasons, the `Adapter` base |
 | `config.py` | TOML for structure, environment and keychain for secrets; refuses credentials in files |
 | `assemble.py` | Settings → cache → router → adapters. Imports an adapter only when a route names it |
 | `cache.py` | Content-addressed on `input_hash`, in the translator's `ReplayProvider` shape |
@@ -74,6 +77,7 @@ deployment can attach a single adapter without a router if it wants to.
 | `cli/_process.py` | The rules every CLI shares: closed stdin, tree-killing timeout, empty working directory, scrubbed environment, shim guard |
 | `cli/command.py` | The generic CLI adapter, driven by a `[command.<name>]` table |
 | `cli/claude_code.py` | `claude -p --output-format json` on a Claude subscription |
+| `cli/command_code.py` | `cmd -p --output-format json` on a Command Code account; the 94-model catalog with vision flags |
 | `cli/codex.py` | `codex exec --json` on a ChatGPT subscription |
 | `keys/anthropic.py` | The Messages API through the official SDK; the metered path |
 | `report.py` | `python -m provider.report <ledger>` |

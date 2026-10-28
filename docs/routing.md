@@ -8,7 +8,9 @@ extraction = ["claude_code:haiku", "codex:gpt-5-mini", "claude_code:sonnet"]
 ```
 
 Each step is `adapter:model`. The adapter is one of a fixed set (`claude_code`,
-`codex`, `command.<name>`, `keys.<vendor>`); a route never names a module path, so
+`command_code`, `codex`, `command.<name>`, `keys.<vendor>`); the model is everything
+after the first colon, so Command Code's ids work as written
+(`command_code:reflection/beam:free`); a route never names a module path, so
 nothing is imported by name at run time, the same rule the translator's own config
 follows.
 
@@ -26,6 +28,7 @@ config declares it: there is no implicit fallback route (`sim/s01`).
 | The model refused | No | **No**, raised to the caller | 1 call; the next step never started |
 | The account has no money left | No | **No**, raised to the caller | `sim/s06` |
 | Any other failure | No | Yes | — |
+| The request carries images and the step's model cannot see them | Not called | Yes, without spawning it | `sim/s10`: 2 blind steps skipped, 0 calls |
 
 **Escalation is on a reason, never on suspicion.** A small model whose answer
 validates is the answer. Asking a larger model as well, because an answer looked
