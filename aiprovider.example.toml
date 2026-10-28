@@ -1,0 +1,70 @@
+# AIProvider configuration: structure only.
+#
+# No credential belongs in this file, and the loader refuses one (by key name and by
+# value shape). Credentials come from the environment (AIPROVIDER_*) or the OS
+# keychain. Copy this file, edit it, and point AIPROVIDER_CONFIG at the copy.
+#
+# Relative paths are resolved against this file's directory.
+
+cache_dir = ".cache/aiprovider"
+ledger = ".cache/aiprovider/ledger.jsonl"
+
+# Retries a step earns on a malformed or schema-invalid answer before the route
+# escalates. Never applied to a refusal or an exhausted budget.
+max_schema_retries = 1
+
+[routes]
+# Caller model_id -> steps, cheapest capable first. The translator sends the model_id
+# from its ModelSpec; set that to "extraction" when attaching this module. A model_id
+# with no route is refused; "*" would match anything, and is deliberately not declared.
+extraction = ["claude_code:haiku", "codex:gpt-5-mini", "claude_code:sonnet"]
+
+# After launch. Only builds with AIPROVIDER_ALLOW_METERED=1 in the environment:
+# extraction = ["claude_code:haiku", "claude_code:sonnet",
+#               "keys.anthropic:claude-haiku-5-5", "keys.anthropic:claude-sonnet-5-5"]
+
+[claude_code]
+binary = ["claude"]
+timeout_s = 300
+
+[codex]
+binary = ["codex"]
+timeout_s = 300
+reasoning_effort = "low"
+
+# Each subscription's allowance per window, in calls. Set these to your plan's limits;
+# the numbers below are placeholders. The router skips an adapter whose window is used
+# up without spawning it.
+[quota.claude_code]
+units = 200
+window_hours = 5
+
+[quota.codex]
+units = 100
+window_hours = 5
+
+# A further CLI is a table, not a module. This one describes the Gemini CLI's JSON
+# output; check the flags against the version you install before routing to it.
+#
+# [command.gemini]
+# binary = ["gemini"]
+# argv = ["--model", "{model}", "--output-format", "json"]
+# prompt_via = "stdin"
+# output = "json"
+# answer = "response"
+# input_tokens = "stats.models.*.tokens.prompt"
+# output_tokens = "stats.models.*.tokens.candidates"
+# cached_input_tokens = "stats.models.*.tokens.cached"
+# error = "error.message"
+# price_as = "gemini-2.5-flash"
+# timeout_s = 300
+#
+# [prices."gemini-2.5-flash"]
+# input = 0.30
+# output = 2.50
+# cache_read = 0.03
+# cache_write = 0.30
+
+[keys.anthropic]
+timeout_s = 120
+effort = "low"
