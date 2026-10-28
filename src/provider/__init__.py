@@ -9,9 +9,9 @@ deployment cannot reach a model.
 
 from __future__ import annotations
 
-from .assemble import from_environment, from_settings
+from .assemble import Assembly, assemble, from_environment, from_settings
 from .config import ConfigError, Settings, load
 from .protocol import Answer, ProviderError, RefusingProvider
 
-__all__ = ["Answer", "ConfigError", "ProviderError", "RefusingProvider", "Settings", "from_environment",
-           "from_settings", "load"]
+__all__ = ["Answer", "Assembly", "ConfigError", "ProviderError", "RefusingProvider", "Settings", "from_environment",
+           "assemble", "from_settings", "load"]

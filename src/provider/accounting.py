@@ -156,3 +156,46 @@ class Ledger:
 
     def as_dicts(self) -> list[dict[str, Any]]:
         return [asdict(e) for e in self.entries]
+
+
+@dataclass
+class QuotaMeter:
+    """Counts subscription quota per adapter over a rolling window, from the ledger.
+
+    Subscriptions limit usage per window (a number of messages every few hours) and
+    say so only by failing once it is gone. Counting locally lets the router step past
+    an adapter it knows is spent *without* spawning it, and lets the report say how much
+    of each window a run used. The limit is configured, not discovered:
+
+        [quota.claude_code]
+        units = 200          # what one window allows, in calls
+        window_hours = 5
+
+    An adapter with no ``[quota.<name>]`` table is only stopped by the vendor's own
+    limit message, which the adapter maps to `QuotaExhausted` either way.
+    """
+
+    ledger: Ledger
+    windows: dict[str, dict[str, float]] = field(default_factory=dict)
+    clock: Any = time.time
+
+    def used(self, adapter: str) -> float:
+        window = self.windows.get(adapter)
+        hours = float(window.get("window_hours", 5)) if window else 5.0
+        since = self.clock() - hours * 3600
+        return sum(e.quota_units for e in self.ledger.since(since) if e.adapter == adapter)
+
+    def remaining(self, adapter: str) -> float | None:
+        window = self.windows.get(adapter)
+        if not window or "units" not in window:
+            return None
+        return float(window["units"]) - self.used(adapter)
+
+    def check(self, adapter: str) -> str | None:
+        """A reason to skip the adapter, or None if its window has room."""
+        left = self.remaining(adapter)
+        if left is not None and left <= 0:
+            window = self.windows[adapter]
+            return (f"{adapter}: {self.used(adapter):g} of {float(window['units']):g} quota units used in the "
+                    f"last {float(window.get('window_hours', 5)):g}h (counted locally)")
+        return None
