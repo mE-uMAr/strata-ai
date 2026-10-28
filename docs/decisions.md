@@ -1,0 +1,37 @@
+# Decisions
+
+Where the brief left a choice open, or an obvious option was rejected. Each row says
+what was chosen, the alternative, and why.
+
+| # | Decision | Alternative rejected | Why | Evidence |
+| --- | --- | --- | --- | --- |
+| P1 | Import the seam from the translator | Copy `Request`/`Completion` into this repository | A copy drifts silently; an import fails the day the seam changes | `protocol.py` |
+| P2 | Extra fields ride on an `Answer` subclass of `Completion` | Widen the protocol, or report extras through a side channel | The brief forbids changing the protocol without asking; the gateway ignores fields it does not know, so a subclass is invisible to it and visible to everything here | `sim/s02`, `sim/s07` (gateway accepts it) |
+| P3 | The reason for a failure is the exception's class | A `reason` string on one error type | The gateway already handles `ProviderError`; subclasses keep that and let the router match on type | `sim/s05` |
+| P4 | Every error carries what the attempt spent | Report spend only on success | A refusal or a truncation still consumed tokens, and the brief requires true numbers | `sim/s04`, `sim/s06` |
+| C1 | Credentials only from the environment (`AIPROVIDER_*`) or the keychain; a config file holding one is refused | Allow secrets in a gitignored config file | One rule with no exceptions is easier to keep than "secrets are fine in *this* file"; refusal by key name and by value shape catches the common mistakes | `sim/s01` |
+| C2 | `AIPROVIDER_ALLOW_METERED` is read from the environment only | A key in the TOML file | A config file is the thing that gets copied between deployments; the permission to spend should not travel with it | `sim/s01` |
+| C3 | The metered key is `AIPROVIDER_ANTHROPIC_API_KEY`, not `ANTHROPIC_API_KEY` | The vendor's conventional name | The Claude Code CLI reads the conventional name and switches to per-token billing; a distinct name keeps the two paths apart even before the scrub | `config.py` |
+| C4 | No implicit fallback route; `"*"` only if declared | Route unknown `model_id`s to a default | A default route is exactly the "default fell through" the brief forbids | `sim/s01` |
+| K1 | The cache writes the translator's `ReplayProvider` shape, one file per hash | One SQLite file or a JSONL log | Interoperability with the translator's offline replay is worth more than tidiness; one file per answer is also easy to inspect or delete | `sim/s02` |
+| K2 | A hit reports zero tokens and zero cost | Report the original call's numbers, as `ReplayProvider` does | The gateway budgets on these numbers; reporting the original cost again would charge twice for one call. The original cost is kept as `avoided_usd` | `sim/s02` |
+| K3 | Only schema-valid answers are cached | Cache everything and let the gateway reject | A cached bad answer is a failure replayed for ever at no cost and no visibility | `sim/s02` |
+| V1 | Validation is strict: prose around JSON fails | Extract the JSON from the prose | The translator's G5: repairing output silently hides a prompt regression. Strict failure shows up as retries in the ledger | `sim/s05` |
+| V2 | Rejection notes describe the schema rule, never the answer | Quote the offending value back | The model's output is data; it must not become text in the next prompt | `validate.py` |
+| R1 | Retries live in the router, not in adapters | Let each adapter retry | The translator's rule is no retries inside a provider; the router is the policy layer, and its retries are bounded and ledgered | `sim/s05` |
+| R2 | A metered step makes the router fail to build without the switch | Drop the step silently, or skip it at run time | Dropping it hides a misconfiguration; failing names the step | `sim/s05` |
+| R3 | Refusals and exhausted budgets are raised, not escalated | Treat them like any failure | Shopping a refusal across models is not a policy to automate; a spent budget would move spending to an account nobody chose | `sim/s05`, `sim/s06` |
+| R4 | Local quota counting from the ledger | Rely only on the vendor's limit message | Counting lets the router skip a spent subscription without spawning it; the vendor message is still honoured when no quota is configured | `sim/s05` |
+| X1 | Claude Code without `--bare` | `--bare` for a minimal session | `--bare` authenticates only with an API key and never reads the subscription login | `claude --help`; `sim/s04` |
+| X2 | Claude Code with `--tools ""`, `--strict-mcp-config`, `--setting-sources project` in an empty directory, and a two-sentence `--system-prompt` | The CLI's defaults | No tools to misuse, no tool definitions billed per call, no user hooks or MCP servers, and none of the default agent system prompt | `sim/s04`; `sim/live_claude_code.py` |
+| X3 | Prompts go to CLIs on stdin | On argv | Windows CLIs are `cmd.exe` shims that re-parse argv; untrusted text there is a command-injection risk. stdin is also unbounded in length | `sim/s03` |
+| X4 | Kill the whole process tree on timeout | `Popen.kill()` | On Windows that kills the shim and leaves node holding the pipes, so the call hangs anyway | `sim/s03` |
+| X5 | `claude_code.py` and `codex.py` are modules, not `command.py` config entries | Describe them as generic tools | Claude Code reports an API-equivalent cost and cache figures, Codex an event stream; both need error mapping a path expression cannot express. They share `_process.py`, not `command.py`, so no adapter imports another | `sim/s04` |
+| A1 | The Anthropic adapter uses the official SDK, as an optional extra | Raw HTTP with `urllib` | The SDK builds the request exactly as the API expects and types its errors; its retries are switched off (`max_retries=0`), and as an extra it is absent from installations that never asked for the metered path | `sim/s06` (one request per error) |
+| A2 | The schema goes in the system prompt on the API path, after the document on CLI paths | The same position everywhere | On the API the system prompt is structured data and part of the cached prefix; on a CLI it would have to cross a shim's argv | `sim/s06` |
+| A3 | Native structured output is opt-in (`structured = true`) | On by default | It accepts a subset of JSON Schema; a translator schema outside it would fail every call, while the contract in the prompt works for any schema | `keys/anthropic.py` |
+| A4 | No `temperature` or `seed` is sent | Send them | The current API version rejects sampling parameters; CLIs have no flag. Determinism comes from repeated runs (translator ADR 0010) | `sim/s06` |
+| S1 | Compact schema: no whitespace, no `title` keys, descriptions kept | Send the schema as Pydantic emits it | 45% fewer tokens across the five templates; titles repeat field names, descriptions carry meaning | `sim/s08` |
+| S2 | The contract is appended after the caller's prompt on CLI paths | Insert it between the template's instructions and the document, so it joins the cacheable head | Inserting into the caller's prompt changes text the translator hashed and evaluated; appending leaves the caller's prompt an exact prefix. The cost is that on CLI paths the schema is re-read per call (quota, not money) | `sim/s08` |
+| D1 | Version field is the constant `"0"` | A real version number | Packaging tools demand the field; identity is the commit (translator ADR 0009) | `pyproject.toml` |
+| D2 | The translator is a path dependency | Depend on `translator` by name | A bare name could be satisfied by an unrelated package of that name on a public index | `pyproject.toml` |
