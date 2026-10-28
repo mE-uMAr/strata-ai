@@ -24,6 +24,68 @@ from pathlib import Path
 from typing import Any
 
 
+@dataclass(frozen=True)
+class Price:
+    """USD per million tokens.
+
+    ``cache_read`` is what a token served from the vendor's prompt cache costs, and
+    ``cache_write`` what writing one costs (Anthropic charges 1.25x input for a
+    five-minute entry; OpenAI caches automatically and charges no write premium). Above
+    ``long_context_from`` input tokens a request is billed at the ``long_*`` rates where
+    the vendor has such a tier.
+    """
+
+    input: float
+    output: float
+    cache_read: float
+    cache_write: float
+    long_context_from: int | None = None
+    long_input: float | None = None
+    long_output: float | None = None
+
+    def cost(self, *, input_tokens: int, output_tokens: int, cache_read_tokens: int = 0,
+             cache_write_tokens: int = 0) -> float:
+        """``input_tokens`` is the total input, cached or not, as `Answer` defines it."""
+        long = self.long_context_from is not None and input_tokens > self.long_context_from
+        rate_in = self.long_input if long and self.long_input is not None else self.input
+        rate_out = self.long_output if long and self.long_output is not None else self.output
+        scale = rate_in / self.input if self.input else 1.0
+        uncached = max(0, input_tokens - cache_read_tokens - cache_write_tokens)
+        return round((uncached * rate_in + cache_read_tokens * self.cache_read * scale
+                      + cache_write_tokens * self.cache_write * scale + output_tokens * rate_out) / 1e6, 8)
+
+
+PRICES: dict[str, Price] = {
+    # Anthropic first-party API rates, as published in October 2026.
+    "claude-haiku-5-5": Price(0.10, 0.50, 0.01, 0.125, long_context_from=100_000, long_input=0.50, long_output=2.50),
+    "claude-sonnet-5-5": Price(2.00, 10.00, 0.20, 2.50),
+    "claude-opus-5-5": Price(4.00, 20.00, 0.20, 5.00),
+    "claude-fable-5-1": Price(10.00, 50.00, 0.25, 12.50),
+    "claude-sonnet-5": Price(2.00, 10.00, 0.20, 2.50),
+    "claude-opus-5": Price(5.00, 25.00, 0.50, 6.25),
+    "claude-sonnet-4-6": Price(3.00, 15.00, 0.30, 3.75),
+    "claude-haiku-4-5": Price(1.00, 5.00, 0.10, 1.25),
+    # OpenAI rates for the models the Codex CLI fronts. Not re-verified when this table
+    # was written: check them against the vendor's page before trusting a saving figure
+    # built on them, and override them in the config's [prices] table.
+    "gpt-5": Price(1.25, 10.00, 0.125, 1.25),
+    "gpt-5-codex": Price(1.25, 10.00, 0.125, 1.25),
+    "gpt-5-mini": Price(0.25, 2.00, 0.025, 0.25),
+    "gpt-5-nano": Price(0.05, 0.40, 0.005, 0.05),
+}
+"""Overridden or extended per deployment by the config's ``[prices."<model>"]`` tables."""
+
+ALIASES = {"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5"}
+"""The Claude Code CLI's short model names, for pricing what it would have cost metered."""
+
+
+def price_for(model: str, overrides: dict[str, dict[str, float]] | None = None) -> Price | None:
+    model = ALIASES.get(model, model)
+    if overrides and model in overrides:
+        return Price(**overrides[model])
+    return PRICES.get(model)
+
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 

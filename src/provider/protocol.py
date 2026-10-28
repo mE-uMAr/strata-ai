@@ -116,7 +116,9 @@ class Adapter:
     """What every adapter in `cli/` and `keys/` provides.
 
     ``ask`` takes the vendor model explicitly so the router can walk a ladder of
-    models through one adapter. ``complete`` makes the adapter a `Provider` on its own:
+    models through one adapter, and an optional ``note`` the router appends on a retry
+    (the reason the previous answer was rejected), which goes after everything else
+    so the previous request stays a cacheable prefix. ``complete`` makes the adapter a `Provider` on its own:
     it maps the caller's ``model_id`` through ``models`` and refuses one it was not
     told about, rather than falling back to some default model.
     """
@@ -129,7 +131,7 @@ class Adapter:
     def metered(self) -> bool:
         return self.path == "metered"
 
-    def ask(self, request: Request, model: str) -> Answer:  # pragma: no cover - interface
+    def ask(self, request: Request, model: str, note: str = "") -> Answer:  # pragma: no cover - interface
         raise NotImplementedError
 
     def complete(self, request: Request) -> Answer:

@@ -91,3 +91,20 @@ class Scripted:
         text = self.reply(request)
         return Answer(text=text, input_tokens=estimate_tokens(request.prompt), output_tokens=estimate_tokens(text),
                       adapter=self.name, model="none", path="local", usage_source="estimated")
+
+
+FAKE = ROOT / "sim" / "fake_cli.py"
+
+
+def fake_binary(persona: str) -> list[str]:
+    """The fake CLI as a command prefix: the real interpreter, not a shell shim."""
+    return [sys.executable, str(FAKE), "--as", persona]
+
+
+def fake_env(state: Path, modes: str = "ok", answer: dict | None = None) -> dict[str, str]:
+    return {"FAKE_CLI_STATE": str(state), "FAKE_CLI_MODES": modes,
+            "FAKE_CLI_ANSWER": json.dumps(answer if answer is not None else ANSWER)}
+
+
+def seen(state: Path, n: int) -> dict:
+    return json.loads((state / f"seen-{n}.json").read_text(encoding="utf-8"))
