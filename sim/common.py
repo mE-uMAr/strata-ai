@@ -62,3 +62,32 @@ def request(prompt: str = "Extract the rules.\n\nThe document follows.", *, mode
     return Request(prompt=prompt, prompt_name=name, model_id=model_id, temperature=0.0,
                    max_output_tokens=max_output_tokens, seed=None, schema=schema,
                    input_hash="sha256:" + hashlib.sha256(body.encode()).hexdigest())
+
+
+TRIAGE_ANSWER = {
+    "is_strategy": True, "style": "systematic", "instruments": ["EURUSD"], "timeframes": ["1H"],
+    "language": "en",
+    "data_needs": {"bars": True, "ticks": False, "volume": False, "order_flow": False, "news": False},
+    "decision": "proceed", "reasons": ["Entries, exits and risk are all stated as conditions."],
+    "missing_for_translatability": [],
+}
+
+
+class Scripted:
+    """A local provider: answers from a function of the request, and counts calls.
+
+    It reports ``path="local"`` and estimated usage, which is what it is: no model.
+    """
+
+    name = "scripted"
+
+    def __init__(self, reply=None) -> None:
+        self.reply = reply or (lambda request: json.dumps(ANSWER))
+        self.calls = 0
+
+    def complete(self, request: Request):
+        from provider.protocol import Answer, estimate_tokens
+        self.calls += 1
+        text = self.reply(request)
+        return Answer(text=text, input_tokens=estimate_tokens(request.prompt), output_tokens=estimate_tokens(text),
+                      adapter=self.name, model="none", path="local", usage_source="estimated")
