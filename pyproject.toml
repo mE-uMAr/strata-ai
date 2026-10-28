@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aiprovider"
+# Packaging tools refuse a project without this field, so it holds a constant that is
+# never bumped. Identity is the commit, as everywhere in Strata (ADR 0009).
+version = "0"
+description = "Strata's model-provider module: subscription CLIs first, metered keys only when configured."
+requires-python = ">=3.12"
+dependencies = [
+  # The seam this module implements. A path reference rather than a name: the
+  # translator is a sibling repository, and a bare name would let an unrelated
+  # package of the same name on a public index satisfy it.
+  "translator @ {root:parent:uri}/translator",
+  # Output is checked against the request's JSON Schema before a route accepts it,
+  # because escalating on a schema failure is the router's job (docs/routing.md).
+  # Local only: it never fetches a remote $ref.
+  "jsonschema>=4.22",
+]
+
+[project.optional-dependencies]
+# The metered path. Optional, so an installation that never asked for it cannot
+# reach it even by import.
+keys = ["anthropic>=1.0"]
+# Credentials from the OS keychain instead of the environment.
+keychain = ["keyring>=25"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/provider"]
