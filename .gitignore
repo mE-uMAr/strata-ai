@@ -1,0 +1,22 @@
+# The initial brief for the agent building this module: local, never committed.
+PROMPT.md
+
+# Credentials. Nothing with a key in it ever enters this repository.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# Recorded model responses and caches: content-addressed, regenerable, often large.
+.cache/
+recordings/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
