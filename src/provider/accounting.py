@@ -199,3 +199,142 @@ class QuotaMeter:
             return (f"{adapter}: {self.used(adapter):g} of {float(window['units']):g} quota units used in the "
                     f"last {float(window.get('window_hours', 5)):g}h (counted locally)")
         return None
+
+
+# -- the saving report ------------------------------------------------------
+
+FAILURE_OUTCOMES = ("schema", "limit", "unavailable", "refusal", "budget", "error")
+
+
+@dataclass(frozen=True)
+class SavingReport:
+    """What a run cost, what it would have cost, and why the difference exists.
+
+    Built from ledger entries and nothing else. ``would_have_cost_usd`` is the price of
+    the same work with no cache and every call metered: the metered-equivalent of every
+    attempt actually made (failed ones included, since a metered run would have paid
+    for those too), plus what each cache hit avoided.
+    """
+
+    requests: int
+    cache_hits: int
+    repeated: int
+    repeated_hits: int
+    answered_by_subscription: int
+    answered_by_metered: int
+    answered_locally: int
+    answered_after_escalation: int
+    attempts: int
+    failed_attempts: dict[str, int]
+    metered_attempts: int
+    spent_usd: float
+    metered_equivalent_usd: float
+    avoided_by_cache_usd: float
+    input_tokens: int
+    output_tokens: int
+    cached_input_tokens: int
+    estimated_entries: int
+    quota_used: dict[str, float]
+    quota_remaining: dict[str, float | None]
+
+    @property
+    def hit_rate(self) -> float:
+        return self.cache_hits / self.requests if self.requests else 0.0
+
+    @property
+    def repeated_hit_rate(self) -> float | None:
+        return self.repeated_hits / self.repeated if self.repeated else None
+
+    @property
+    def would_have_cost_usd(self) -> float:
+        return round(self.metered_equivalent_usd + self.avoided_by_cache_usd, 8)
+
+    @property
+    def saving_usd(self) -> float:
+        return round(self.would_have_cost_usd - self.spent_usd, 8)
+
+    @property
+    def flags(self) -> list[str]:
+        """Things the brief calls bugs or wants made loud."""
+        out = []
+        if self.repeated and self.repeated_hits < self.repeated:
+            out.append(f"BUG: {self.repeated - self.repeated_hits} repeated request(s) missed the cache")
+        if self.metered_attempts:
+            out.append(f"metered path taken on {self.metered_attempts} attempt(s)")
+        if self.estimated_entries:
+            out.append(f"{self.estimated_entries} ledger line(s) carry estimated, not measured, usage")
+        return out
+
+    def render(self) -> str:
+        def usd(x: float) -> str:
+            return f"${x:,.6f}"
+        rate = self.repeated_hit_rate
+        lines = [
+            "Saving report",
+            f"  requests answered             {self.requests}",
+            f"    from the cache              {self.cache_hits}  ({self.hit_rate:.1%} of requests)",
+            f"    repeated requests           {self.repeated}, served from cache: "
+            + ("n/a" if rate is None else f"{self.repeated_hits} ({rate:.1%})"),
+            f"    by a subscription path      {self.answered_by_subscription}",
+            f"    by a metered path           {self.answered_by_metered}",
+            f"    locally (stub or fake)      {self.answered_locally}",
+            f"    after an escalation         {self.answered_after_escalation}",
+            f"  model attempts                {self.attempts}  (not answered: "
+            + (", ".join(f"{k} {v}" for k, v in sorted(self.failed_attempts.items())) or "none") + ")",
+            f"  tokens in / out               {self.input_tokens:,} / {self.output_tokens:,}"
+            f"  ({self.cached_input_tokens:,} input tokens read from vendor prompt caches)",
+            f"  money spent                   {usd(self.spent_usd)}",
+            f"  the same work, all metered    {usd(self.would_have_cost_usd)}"
+            f"  ({usd(self.metered_equivalent_usd)} for calls made + {usd(self.avoided_by_cache_usd)} avoided by the cache)",
+            f"  saving                        {usd(self.saving_usd)}",
+            "  quota used (units)            " + (", ".join(
+                f"{k} {v:g}" + ("" if self.quota_remaining.get(k) is None else f" ({self.quota_remaining[k]:g} left)")
+                for k, v in sorted(self.quota_used.items())) or "none"),
+        ]
+        lines += [f"  ! {flag}" for flag in self.flags]
+        return "\n".join(lines)
+
+
+def report(entries: list[Entry], quota: QuotaMeter | None = None) -> SavingReport:
+    seen: set[str] = set()
+    repeated = repeated_hits = 0
+    answered = {"subscription": 0, "metered": 0, "local": 0}
+    hits = escalated = 0
+    failed: dict[str, int] = {}
+    attempts = metered_attempts = 0
+    quota_used: dict[str, float] = {}
+    for e in entries:
+        if e.outcome in ("ok", "hit"):
+            if e.input_hash in seen:
+                repeated += 1
+                repeated_hits += e.outcome == "hit"
+            seen.add(e.input_hash)
+            if e.outcome == "hit":
+                hits += 1
+            else:
+                answered[e.path if e.path in answered else "local"] += 1
+                escalated += e.rung > 0
+        skipped = e.outcome == "limit" and "counted locally" in e.note
+        if skipped:
+            failed["skipped for quota"] = failed.get("skipped for quota", 0) + 1
+        elif e.outcome != "hit":
+            attempts += 1
+            metered_attempts += e.path == "metered"
+            if e.outcome in FAILURE_OUTCOMES:
+                failed[e.outcome] = failed.get(e.outcome, 0) + 1
+        if e.quota_units:
+            quota_used[e.adapter] = quota_used.get(e.adapter, 0.0) + e.quota_units
+    return SavingReport(
+        requests=hits + sum(answered.values()), cache_hits=hits, repeated=repeated, repeated_hits=repeated_hits,
+        answered_by_subscription=answered["subscription"], answered_by_metered=answered["metered"],
+        answered_locally=answered["local"], answered_after_escalation=escalated, attempts=attempts,
+        failed_attempts=failed, metered_attempts=metered_attempts,
+        spent_usd=round(sum(e.cost_usd for e in entries), 8),
+        metered_equivalent_usd=round(sum(e.metered_equivalent_usd for e in entries if e.outcome != "hit"), 8),
+        avoided_by_cache_usd=round(sum(e.avoided_usd for e in entries), 8),
+        input_tokens=sum(e.input_tokens for e in entries), output_tokens=sum(e.output_tokens for e in entries),
+        cached_input_tokens=sum(e.cached_input_tokens for e in entries),
+        estimated_entries=sum(1 for e in entries if e.usage_source == "estimated"),
+        quota_used=quota_used,
+        quota_remaining={k: (quota.remaining(k) if quota else None) for k in quota_used},
+    )
