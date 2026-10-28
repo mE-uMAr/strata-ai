@@ -66,10 +66,12 @@ claim("SYSTEM, estimated tokens", estimate_tokens(SYSTEM), estimate_tokens(SYSTE
 
 heading("the example config")
 settings = load({}, config_path=ROOT / "aiprovider.example.toml")
-claim("routes", {k: [str(s) for s in v] for k, v in settings.routes.items()}, "extraction" in settings.routes)
+claim("routes", sorted(settings.routes), sorted(settings.routes) == ["extraction", "vision"])
 claim("metered steps named", [str(s) for v in settings.routes.values() for s in v if s.adapter.startswith("keys.")],
       not any(s.adapter.startswith("keys.") for v in settings.routes.values() for s in v))
 assembly = assemble(settings)
 claim("assembles into", type(assembly.provider).__name__, type(assembly.provider).__name__ == "ReplayCache")
+blind = [str(step) for step in assembly.router.routes["vision"] if not step.adapter.sees_images(step.model)]
+claim("vision route steps that cannot see images", blind, blind == [])
 
 finish("s08")

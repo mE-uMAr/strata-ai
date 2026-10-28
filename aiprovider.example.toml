@@ -17,15 +17,33 @@ max_schema_retries = 1
 # Caller model_id -> steps, cheapest capable first. The translator sends the model_id
 # from its ModelSpec; set that to "extraction" when attaching this module. A model_id
 # with no route is refused; "*" would match anything, and is deliberately not declared.
-extraction = ["claude_code:haiku", "codex:gpt-5-mini", "claude_code:sonnet"]
+#
+# Command Code comes after Claude Code: every Command Code call carries about 14K tokens
+# of the CLI's own agent prompt (measured), against about 1K for Claude Code.
+extraction = ["claude_code:haiku", "command_code:deepseek/deepseek-v4-flash", "codex:gpt-5-mini",
+              "claude_code:sonnet"]
+
+# For requests carrying images (a VisionRequest). Steps whose model cannot see images
+# are skipped without being started, so a text-only step here would only be passed over.
+# Claude Code takes images inline in one turn (997 input tokens for one image, measured);
+# Command Code's vision models read them with a tool, a turn per image (29,325).
+vision = ["claude_code:haiku", "command_code:deepseek/deepseek-v4.1-flash", "claude_code:sonnet"]
 
 # After launch. Only builds with AIPROVIDER_ALLOW_METERED=1 in the environment:
 # extraction = ["claude_code:haiku", "claude_code:sonnet",
 #               "keys.anthropic:claude-haiku-5-5", "keys.anthropic:claude-sonnet-5-5"]
+# vision = ["claude_code:haiku", "keys.anthropic:claude-haiku-5-5"]
 
 [claude_code]
 binary = ["claude"]
 timeout_s = 300
+
+[command_code]
+binary = ["commandcode"]
+timeout_s = 300
+# path = "metered"       # if the account is pay-as-you-go rather than a plan
+# effort = "low"         # passed as --effort; what it means depends on the model
+# vision_models = [...]  # narrows or widens the built-in list of 49 models that see images
 
 [codex]
 binary = ["codex"]
@@ -36,6 +54,10 @@ reasoning_effort = "low"
 # the numbers below are placeholders. The router skips an adapter whose window is used
 # up without spawning it.
 [quota.claude_code]
+units = 200
+window_hours = 5
+
+[quota.command_code]
 units = 200
 window_hours = 5
 
